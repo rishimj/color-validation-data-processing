@@ -1,0 +1,11 @@
+===== VALIDATION RESULTS =====
+Total images: 120
+Correctly classified: 90
+Overall accuracy: 75.00%
+
+Accuracy by category:
+in-range-dark: 60.38% (32/53)
+in-range-light: 87.50% (7/8)
+in-range-standard: 76.19% (16/21)
+out-of-range-too-dark: 95.24% (20/21)
+out-of-range-too-light: 88.24% (15/17)
