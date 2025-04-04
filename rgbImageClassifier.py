@@ -326,30 +326,182 @@ def plot_all_reference_profiles(reference_profiles, output_path=None):
     else:
         plt.show()
 
+def extract_true_category(image_path):
+    """
+    Extract the true category from the image path.
+    Assumes directory structure like: .../medium-cherry/out-of-range-too-light/image.jpg
+    
+    Args:
+        image_path: Path to the image
+        
+    Returns:
+        str: True category name
+    """
+    parts = image_path.split(os.sep)
+    # Find the category part (should be a directory name like "out-of-range-too-light")
+    for i, part in enumerate(parts):
+        if part in CATEGORIES:
+            return part
+    
+    # Fallback to the parent directory name if no match found in CATEGORIES
+    if len(parts) >= 2:
+        return parts[-2]
+    
+    return "unknown"
+
+def get_main_category(category):
+    """
+    Get the main category (in-range or out-of-range) from the detailed category.
+    
+    Args:
+        category: Detailed category name
+        
+    Returns:
+        str: 'in-range' or 'out-of-range'
+    """
+    if category.startswith('out-of-range'):
+        return 'out-of-range'
+    elif category.startswith('in-range'):
+        return 'in-range'
+    else:
+        return 'unknown'
+
+def validate_classifier_accuracy(dataset_path, reference_profiles_csv, max_images_per_category=None):
+    """
+    Run through all images in the dataset and check if predictions match true categories.
+    Also tracks if the prediction matches the correct main category (in-range vs out-of-range).
+    
+    Args:
+        dataset_path: Path to the dataset directory
+        reference_profiles_csv: Path to reference profiles CSV
+        max_images_per_category: Limit images per category (optional)
+        
+    Returns:
+        dict: Accuracy statistics
+    """
+    print(f"Starting validation on dataset: {dataset_path}")
+    
+    # Load reference profiles
+    reference_profiles = load_reference_profiles(reference_profiles_csv)
+    
+    # Statistics
+    stats = {
+        "total": 0,
+        "correct": 0,
+        "correctCategory": 0,  # New metric for main category correctness
+        "by_category": {},
+        "by_main_category": {
+            "in-range": {"total": 0, "correct": 0},
+            "out-of-range": {"total": 0, "correct": 0}
+        }
+    }
+    
+    # Process each category in the dataset
+    for category in CATEGORIES:
+        category_path = os.path.join(dataset_path, category)
+        
+        if not os.path.exists(category_path):
+            print(f"Warning: Category path not found: {category_path}")
+            continue
+        
+        # Get all images in this category
+        image_paths = get_image_paths_from_category(category_path)
+        
+        # Get the main category
+        main_category = get_main_category(category)
+        
+        # Initialize category stats
+        if category not in stats["by_category"]:
+            stats["by_category"][category] = {"total": 0, "correct": 0, "correctCategory": 0}
+        
+        print(f"Processing {len(image_paths)} images from {category} (main: {main_category})...")
+        
+        # Process images in this category
+        for img_path in tqdm(image_paths, desc=category):
+            try:
+                # Calculate distance profile
+                image_profile = calculate_image_distribution(
+                    img_path, dataset_path, max_images_per_category, normalize=True
+                )
+                
+                # Classify the image
+                predicted_category, _ = classify_image(image_profile, reference_profiles)
+                
+                # Get the main category of the prediction
+                predicted_main_category = get_main_category(predicted_category)
+                
+                # Update statistics
+                stats["total"] += 1
+                stats["by_category"][category]["total"] += 1
+                stats["by_main_category"][main_category]["total"] += 1
+                
+                # Check if exact category is correct
+                if predicted_category == category:
+                    stats["correct"] += 1
+                    stats["by_category"][category]["correct"] += 1
+                
+                # Check if main category is correct
+                if predicted_main_category == main_category:
+                    stats["correctCategory"] += 1
+                    stats["by_category"][category]["correctCategory"] += 1
+                    stats["by_main_category"][main_category]["correct"] += 1
+                    
+            except Exception as e:
+                print(f"Error processing {img_path}: {str(e)}")
+    
+    # Calculate accuracy percentages
+    if stats["total"] > 0:
+        stats["accuracy"] = stats["correct"] / stats["total"] * 100
+        stats["categoryAccuracy"] = stats["correctCategory"] / stats["total"] * 100
+        
+        for category, cat_stats in stats["by_category"].items():
+            if cat_stats["total"] > 0:
+                cat_stats["accuracy"] = cat_stats["correct"] / cat_stats["total"] * 100
+                cat_stats["categoryAccuracy"] = cat_stats["correctCategory"] / cat_stats["total"] * 100
+        
+        for main_cat, main_stats in stats["by_main_category"].items():
+            if main_stats["total"] > 0:
+                main_stats["accuracy"] = main_stats["correct"] / main_stats["total"] * 100
+    
+    # Print results
+    print("\n===== VALIDATION RESULTS =====")
+    print(f"Total images: {stats['total']}")
+    print(f"Correctly classified (exact category): {stats['correct']} ({stats.get('accuracy', 0):.2f}%)")
+    print(f"Correctly classified (main category): {stats['correctCategory']} ({stats.get('categoryAccuracy', 0):.2f}%)")
+    
+    print("\nAccuracy by specific category:")
+    for category, cat_stats in sorted(stats["by_category"].items()):
+        if cat_stats["total"] > 0:
+            print(f"  {category}:")
+            print(f"    Exact match: {cat_stats.get('accuracy', 0):.2f}% ({cat_stats['correct']}/{cat_stats['total']})")
+            print(f"    Main category match: {cat_stats.get('categoryAccuracy', 0):.2f}% ({cat_stats['correctCategory']}/{cat_stats['total']})")
+    
+    print("\nAccuracy by main category:")
+    for main_cat, main_stats in sorted(stats["by_main_category"].items()):
+        if main_stats["total"] > 0:
+            print(f"  {main_cat}: {main_stats.get('accuracy', 0):.2f}% ({main_stats['correct']}/{main_stats['total']})")
+    
+    return stats
+
 def main():
     # Set up command line arguments
     testImage = "/Users/rishimanimaran/Documents/College/junior-year/spring-2025/cs-3312/color-validation-app-spring/images-dataset-4.0/medium-cherry/out-of-range-too-light/medium-cherry-out-of-range-too-light-1.jpg"
     
     parser = argparse.ArgumentParser(description='Classify a wood veneer image based on RGB Euclidean distance profile.')
-    parser.add_argument('--image', type=str,default =testImage, help='Path to the input image')
+    parser.add_argument('--image', type=str, default=testImage, help='Path to the input image')
     parser.add_argument('--dataset', type=str, default=DATASET_PATH, help='Path to the dataset')
     parser.add_argument('--references', type=str, default=REFERENCE_PROFILES_CSV, help='Path to reference profiles CSV')
     parser.add_argument('--max_images', type=int, default=20, help='Maximum images to use per category')
     parser.add_argument('--output', type=str, help='Output directory for results')
     parser.add_argument('--show_profiles', action='store_true', help='Show all reference profiles')
-    
-    # Add this argument
-    parser.add_argument('--validate', action='store_true', 
-                        help='Run validation on the entire dataset')
+    parser.add_argument('--validate', action='store_true', help='Run validation on the entire dataset')
     
     args = parser.parse_args()
     
-    # Add this condition after parsing args
+    # Run validation if requested
     if args.validate:
         validate_classifier_accuracy(args.dataset, args.references, args.max_images)
         return
-    
-    
     
     # Check if input image exists
     if not os.path.exists(args.image):
@@ -413,110 +565,6 @@ def main():
         visualize_image_with_result(args.image, predicted_category)
     
     print("\nClassification complete!")
-    
-'''
-added stuff
-'''
-
-def extract_true_category(image_path):
-    """
-    Extract the true category from the image path.
-    Assumes directory structure like: .../medium-cherry/out-of-range-too-light/image.jpg
-    
-    Args:
-        image_path: Path to the image
-        
-    Returns:
-        str: True category name
-    """
-    parts = image_path.split(os.sep)
-    # The category is usually the second-to-last directory in the path
-    if len(parts) >= 2:
-        return parts[-2]  # Returns "out-of-range-too-light" from the example path
-    return "unknown"
-
-def validate_classifier_accuracy(dataset_path, reference_profiles_csv, max_images_per_category=None):
-    """
-    Run through all images in the dataset and check if predictions match true categories.
-    
-    Args:
-        dataset_path: Path to the dataset directory
-        reference_profiles_csv: Path to reference profiles CSV
-        max_images_per_category: Limit images per category (optional)
-        
-    Returns:
-        dict: Accuracy statistics
-    """
-    print(f"Starting validation on dataset: {dataset_path}")
-    
-    # Load reference profiles
-    reference_profiles = load_reference_profiles(reference_profiles_csv)
-    
-    # Statistics
-    stats = {
-        "total": 0,
-        "correct": 0,
-        "by_category": {}
-    }
-    
-    # Find all image files in the dataset
-    all_images = []
-    for root, _, files in os.walk(dataset_path):
-        for file in files:
-            if file.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp')):
-                all_images.append(os.path.join(root, file))
-    
-    print(f"Found {len(all_images)} images to validate")
-    
-    # Process each image
-    for img_path in tqdm(all_images, desc="Validating images"):
-        # Extract true category
-        true_category = extract_true_category(img_path)
-        
-        # Initialize category stats if not exists
-        if true_category not in stats["by_category"]:
-            stats["by_category"][true_category] = {"total": 0, "correct": 0}
-        
-        try:
-            # Calculate distance profile
-            image_profile = calculate_image_distribution(
-                img_path, dataset_path, max_images_per_category, normalize=True
-            )
-            
-            # Classify the image
-            predicted_category, _ = classify_image(image_profile, reference_profiles)
-            
-            # Update statistics
-            stats["total"] += 1
-            stats["by_category"][true_category]["total"] += 1
-            
-            if predicted_category == true_category:
-                stats["correct"] += 1
-                stats["by_category"][true_category]["correct"] += 1
-                
-        except Exception as e:
-            print(f"Error processing {img_path}: {str(e)}")
-    
-    # Calculate accuracy percentages
-    if stats["total"] > 0:
-        stats["accuracy"] = stats["correct"] / stats["total"] * 100
-        
-        for category, cat_stats in stats["by_category"].items():
-            if cat_stats["total"] > 0:
-                cat_stats["accuracy"] = cat_stats["correct"] / cat_stats["total"] * 100
-    
-    # Print results
-    print("\n===== VALIDATION RESULTS =====")
-    print(f"Total images: {stats['total']}")
-    print(f"Correctly classified: {stats['correct']}")
-    print(f"Overall accuracy: {stats.get('accuracy', 0):.2f}%")
-    
-    print("\nAccuracy by category:")
-    for category, cat_stats in sorted(stats["by_category"].items()):
-        if cat_stats["total"] > 0:
-            print(f"  {category}: {cat_stats.get('accuracy', 0):.2f}% ({cat_stats['correct']}/{cat_stats['total']})")
-    
-    return stats
 
 if __name__ == "__main__":
     main()
